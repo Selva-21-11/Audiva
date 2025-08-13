@@ -1,88 +1,98 @@
+// src/App.jsx
 import React, { useRef, useState } from "react";
 import { Room, createLocalTracks, RoomEvent } from "livekit-client";
 
-export default function JoinRoom() {
-  const [identity, setIdentity] = useState("user-" + Math.floor(Math.random() * 1000));
-  const [roomName, setRoomName] = useState("test-room");
-  const [connected, setConnected] = useState(false);
-  const roomRef = useRef(null);
-  const audioContainerRef = useRef(null);
+const BACKEND = "http://localhost:8000";
 
-  async function getToken() {
-    const resp = await fetch("http://localhost:8000/session", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ room: roomName, identity }),
-    });
+function RecruiterForm({ onReady }) {
+  const [role, setRole] = useState("Frontend Engineer");
+  const [jd, setJd] = useState("Build features end-to-end in React.");
+  const [skills, setSkills] = useState("React,JavaScript,Testing");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
-    console.log("Token request status:", resp.status);
-    const text = await resp.text();
-    console.log("Token response text:", text);
-
-    if (!resp.ok) {
-      throw new Error(`Error ${resp.status}: ${text || resp.statusText}`);
-    }
-
-    return JSON.parse(text);
-  }
-
-  async function join() {
+  async function startInterview() {
+    setLoading(true);
+    setError(null);
     try {
-      const { token, url } = await getToken();
-      console.log("Received LiveKit URL:", url);
-      console.log("Received Access Token:", token);
-
-      const room = new Room();
-      roomRef.current = room;
-
-      room
-        .on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
-          console.log("Track subscribed from:", participant.identity, track.kind);
-          if (track.kind === "audio") {
-            const el = track.attach();
-            el.autoplay = true;
-            audioContainerRef.current?.appendChild(el);
-          }
+      const resp = await fetch(`${BACKEND}/start_interview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          role,
+          jd,
+          skills: skills.split(",").map(s => s.trim()).filter(Boolean)
         })
-        .on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
-          console.log("Track unsubscribed from:", participant.identity);
-          try { track.detach(); } catch { }
-        })
-        .on(RoomEvent.Disconnected, () => {
-          console.log("Disconnected from room");
-          setConnected(false);
-        })
-        .on(RoomEvent.MediaDevicesError, (err) => {
-          console.error("Media device error:", err);
-          alert("Could not access microphone. Please check permissions.");
-        });
-
-      await room.connect(url, token);
-      console.log("Successfully connected to room:", room.name);
-
-      const tracks = await createLocalTracks({ audio: true, video: false });
-      if (tracks.length) {
-        await room.localParticipant.publishTrack(tracks[0]);
-        console.log("Microphone track published");
-      } else {
-        console.warn("No local tracks published; permission might be blocked.");
-      }
-
-      setConnected(true);
+      });
+      const j = await resp.json();
+      if (!resp.ok) throw new Error(JSON.stringify(j));
+      onReady(j); // { token, url, room, identity }
     } catch (err) {
-      console.error("Error during join:", err);
-      alert("Failed to join LiveKit room. Check console for details.");
+      console.error(err);
+      setError(String(err));
+    } finally {
+      setLoading(false);
     }
   }
 
   return (
-    <div>
-      <div>
-        <input value={identity} onChange={(e) => setIdentity(e.target.value)} />
-        <input value={roomName} onChange={(e) => setRoomName(e.target.value)} />
-        <button onClick={join} disabled={connected}>Join</button>
+    <div style={{padding:20, width:420}}>
+      <h2>Start Interview</h2>
+      <label>Role</label><br/>
+      <input value={role} onChange={e=>setRole(e.target.value)} style={{width:"100%"}}/>
+
+      <label>Job description</label><br/>
+      <textarea value={jd} onChange={e=>setJd(e.target.value)} style={{width:"100%", height:80}}/>
+
+      <label>Skills (comma separated)</label><br/>
+      <input value={skills} onChange={e=>setSkills(e.target.value)} style={{width:"100%"}}/>
+
+      <div style={{marginTop:10}}>
+        <button onClick={startInterview} disabled={loading}>{loading ? "Starting..." : "Start & Join as candidate"}</button>
+        {error && <div style={{color:"red"}}>{error}</div>}
       </div>
-      <div ref={audioContainerRef}></div>
+    </div>
+  );
+}
+
+export default function App() {
+  const audioRef = useRef(null);
+  const roomRef = useRef(null);
+  const [connected, setConnected] = useState(false);
+
+  async function joinAndStart({ token, url }) {
+    const roomObj = new Room();
+    roomRef.current = roomObj;
+
+    roomObj.on(RoomEvent.TrackSubscribed, (track, pub, participant) => {
+      if (track.kind === "audio") {
+        const el = track.attach();
+        el.autoplay = true;
+        audioRef.current?.appendChild(el);
+      }
+    });
+
+    roomObj.on(RoomEvent.Disconnected, () => setConnected(false));
+
+    try {
+      await roomObj.connect(url, token);
+      const tracks = await createLocalTracks({ audio: true, video: false });
+      if (tracks.length) await roomObj.localParticipant.publishTrack(tracks[0]);
+      setConnected(true);
+    } catch (err) {
+      console.error("join error", err);
+      alert("Failed to join: " + err);
+    }
+  }
+
+  return (
+    <div style={{display:"flex", gap:40, padding:20}}>
+      <RecruiterForm onReady={joinAndStart} />
+      <div>
+        <h3>Candidate</h3>
+        <div ref={audioRef}></div>
+        <div>Status: {connected ? "Connected" : "Idle"}</div>
+      </div>
     </div>
   );
 }
